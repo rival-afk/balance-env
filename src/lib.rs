@@ -3,6 +3,7 @@
 
 use pyo3::prelude::*;
 use rand::prelude::*;
+use rayon::prelude::*;
 
 mod env;
 
@@ -71,34 +72,44 @@ impl BatchEnv {
     }
 
     /// actions: список действий (-1, 0, +1) длиной n.
-    /// Возвращает (obs_list, rewards_list, dones_list).
+    /// Возвращает (obs_list, rewards_list, dones_list) — батч-шаг,
+    /// векторизованный rayon across env's (максимум CPU).
     fn step(&mut self, actions: Vec<i8>) -> PyResult<(PyObject, PyObject, PyObject)> {
         if actions.len() != self.envs.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 format!("expected {} actions, got {}", self.envs.len(), actions.len())));
         }
         let dt = 1.0 / 60.0;
-        let mut obs_list = Vec::with_capacity(self.envs.len());
-        let mut rew_list = Vec::with_capacity(self.envs.len());
-        let mut done_list = Vec::with_capacity(self.envs.len());
-        for (i, &a) in actions.iter().enumerate() {
-            let (obs, reward, done) = self.envs[i].step(a, dt);
-            obs_list.push(obs.as_array().to_vec());
-            rew_list.push(reward);
-            done_list.push(done);
+        let results: Vec<([f32; 9], f32, bool)> = self.envs
+            .par_iter_mut()
+            .zip(actions.par_iter())
+            .map(|(e, &a)| e.step(a, dt))
+            .map(|(o, r, d)| (o.as_array(), r, d))
+            .collect();
+        let mut obs_list = Vec::with_capacity(results.len());
+        let mut rew_list = Vec::with_capacity(results.len());
+        let mut done_list = Vec::with_capacity(results.len());
+        for (o, r, d) in results {
+            obs_list.push(o.to_vec());
+            rew_list.push(r);
+            done_list.push(d);
         }
         Python::with_gil(|py| {
-            let obs_list_obj = pyo3::types::PyList::new(py, obs_list.iter().map(|o| o.clone()))?;
-            let rew_list_obj = pyo3::types::PyList::new(py, rew_list.iter().map(|&r| r))?;
-            let done_list_obj = pyo3::types::PyList::new(py, done_list.iter().map(|&d| d))?;
+            let obs_list_obj = pyo3::types::PyList::new(
+                py,
+                obs_list.iter().map(|o| o.to_vec()))?;
+            let rew_list_obj = pyo3::types::PyList::new(
+                py,
+                rew_list.into_iter().map(|r| r))?;
+            let done_list_obj = pyo3::types::PyList::new(
+                py,
+                done_list.into_iter().map(|d| d))?;
             Ok((obs_list_obj.into(), rew_list_obj.into(), done_list_obj.into()))
         })
     }
 
     fn reset(&mut self) {
-        for e in self.envs.iter_mut() {
-            e.reset();
-        }
+        self.envs.par_iter_mut().for_each(|e| e.reset());
     }
 
     fn __len__(&self) -> usize {

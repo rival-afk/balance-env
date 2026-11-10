@@ -12,3 +12,4 @@ name = "balance_env"
 [dependencies]
 pyo3 = { version = "0.23", default-features = false, features = ["extension-module", "abi3-py310", "macros"] }
 rand = "0.8"
+rayon = "1.10"
