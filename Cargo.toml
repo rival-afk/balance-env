@@ -2,12 +2,13 @@
 name = "balance-env"
 version = "0.1.0"
 edition = "2021"
-description = "Headless Balance environment for neural network training (PyO3). Port of the Godot game's physics."
+description = "Headless Balance environment for neural network training. 1:1 port of the Godot game's physics."
 license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+name = "balance_env"
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23", default-features = false, features = ["extension-module", "abi3-py310", "macros"] }
 rand = "0.8"

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "balance_env"
+version = "0.1.0"
+description = "Headless Balance environment for neural network training. 1:1 port of the Godot game's physics."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+
+[tool.maturin]
+module-name = "balance_env"
+features = ["pyo3/extension-module"]
