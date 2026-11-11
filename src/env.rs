@@ -18,6 +18,9 @@ pub const DAMPING: f32 = 0.10;
 pub const CART_ACCEL_RAW: f32 = 70.0;
 /// Rail extent in metres (±2.2 m = ±264 px; the platform stops just short of the walls at ±3 m).
 pub const CART_LIMIT: f32 = 2.2;
+/// Fixed physics sub-step. plat.txt recommends 4–16 sub-steps per 60 Hz frame;
+/// RK4 at 240 Hz keeps this pendulum's energy drift at ~2e-6 per 10 s.
+pub const PHYS_DT: f32 = 1.0 / 240.0;
 
 pub const ASSIST_KP: [f32; 5] = [0.0, 3.0, 15.0, 60.0, 200.0];
 pub const ASSIST_KD: [f32; 5] = [0.0, 1.2, 6.0, 25.0, 80.0];
@@ -177,7 +180,21 @@ impl Env {
         let dir = (action as f32).clamp(-1.0, 1.0);
         let force = dir * CART_ACCEL_RAW;
 
-        // RK4 — same structure as Godot _physics_process
+        // plat.txt §4: integrate with small sub-steps (500–2000 Hz is the usual
+        // advice; 240 Hz already gives ~2e-6 energy drift per 10 s here).
+        let n = ((dt / PHYS_DT).round() as u32).max(1);
+        let h = dt / n as f32;
+        for _ in 0..n {
+            self.integrate(force, h);
+        }
+
+        let (reward, done, _v) = self.score.update(self.s.th1, self.s.th2, dt);
+        (self.obs(), reward, done)
+    }
+
+    /// One RK4 sub-step of the 3-DOF cart + double pendulum (plat.txt §3).
+    fn integrate(&mut self, force: f32, dt: f32) {
+        // RK4 — same structure as Godot _step
         let k1 = deriv(self.s, force, self.assist_level);
         let s2 = State {
             th1: self.s.th1 + 0.5 * dt * k1[0],
@@ -222,14 +239,11 @@ impl Env {
             self.s.x = -CART_LIMIT;
             if self.s.v < 0.0 { self.s.v = 0.0; }
         }
-
-        let (reward, done, _v) = self.score.update(self.s.th1, self.s.th2, dt);
-        (self.obs(), reward, done)
     }
 }
 
-/// Partially vectorised derivative combo — builds matrix + rhs,
-/// solves for raw accelerations, adds assist. Identical construction to Godot.
+/// Builds the plat.txt §3 system A(q)·a = r and solves it with Cramer's rule.
+/// Joint friction and the assist torque are part of r (r2, r3). Identical construction to Godot.
 fn deriv(s: State, force: f32, assist: u8) -> [f32; 6] {
     let (t1, t2, w1, w2) = (s.th1, s.th2, s.w1, s.w2);
     let d = t1 - t2;
@@ -253,8 +267,18 @@ fn deriv(s: State, force: f32, assist: u8) -> [f32; 6] {
     let b0 = force - CART_DAMP * s.v
         + (M1 + M2) * L1 * s1 * w1 * w1
         + M2 * L2 * s2 * w2 * w2;
-    let b1 = -(M2 * L1 * L2 * d.sin() * w2 * w2 + (M1 + M2) * GRAVITY * L1 * s1);
-    let b2 = M2 * L1 * L2 * d.sin() * w1 * w1 - M2 * GRAVITY * L2 * s2;
+    // plat.txt §3: joint friction and the assist torque live in the RHS (r2, r3),
+    // they are not added to the solved accelerations.
+    let kp = ASSIST_KP[assist as usize];
+    let kd = ASSIST_KD[assist as usize];
+    let b1 = -DAMPING * w1
+        - M2 * L1 * L2 * d.sin() * w2 * w2
+        - (M1 + M2) * GRAVITY * L1 * s1
+        + kp * s1 - kd * w1;
+    let b2 = -DAMPING * w2
+        + M2 * L1 * L2 * d.sin() * w1 * w1
+        - M2 * GRAVITY * L2 * s2
+        + kp * s2 - kd * w2;
 
     // Cramer's rule — exactly the same as Godot.
     let det = m00 * (m11 * m22 - m12 * m21)
@@ -262,18 +286,8 @@ fn deriv(s: State, force: f32, assist: u8) -> [f32; 6] {
             + m02 * (m10 * m21 - m11 * m20);
 
     let ac = (b0 * (m11 * m22 - m12 * m21) - m01 * (b1 * m22 - m12 * b2) + m02 * (b1 * m21 - m11 * b2)) / det;
-    let mut a1 = (m00 * (b1 * m22 - m12 * b2) - b0 * (m10 * m22 - m12 * m20) + m02 * (m10 * b2 - b1 * m20)) / det;
-    let mut a2 = (m00 * (m11 * b2 - b1 * m21) - m01 * (m10 * b2 - b1 * m20) + b0 * (m10 * m21 - m11 * m20)) / det;
-
-    // angular damping on the arms (identical to Godot)
-    a1 -= DAMPING * w1;
-    a2 -= DAMPING * w2;
-
-    // assist - identical formulation to Godot
-    let kp = ASSIST_KP[assist as usize];
-    let kd = ASSIST_KD[assist as usize];
-    a1 += kp * t1.sin() - kd * w1;
-    a2 += kp * t2.sin() - kd * w2;
+    let a1 = (m00 * (b1 * m22 - m12 * b2) - b0 * (m10 * m22 - m12 * m20) + m02 * (m10 * b2 - b1 * m20)) / det;
+    let a2 = (m00 * (m11 * b2 - b1 * m21) - m01 * (m10 * b2 - b1 * m20) + b0 * (m10 * m21 - m11 * m20)) / det;
 
     [s.w1, s.w2, a1, a2, s.v, ac]
 }

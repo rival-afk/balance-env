@@ -6,7 +6,7 @@
 //! shared with the single-thread env (`env::ScoreState`, `env::verticality`),
 //! so reward semantics are identical.
 
-use crate::env::{ScoreState, Obs, CART_LIMIT, ASSIST_KP, ASSIST_KD};
+use crate::env::{ScoreState, Obs, CART_LIMIT, ASSIST_KP, ASSIST_KD, PHYS_DT};
 use rand::prelude::*;
 use rayon::prelude::*;
 
@@ -145,6 +145,9 @@ impl GpuCore {
         let mut params = [0u8; 16];
         params[0..4].copy_from_slice(&dt.to_le_bytes());
         params[4..8].copy_from_slice(&(n as u32).to_le_bytes());
+        // plat.txt §4: 240 Hz RK4 inside the shader, 4 sub-steps per 60 Hz frame.
+        let substeps = ((dt / PHYS_DT).round() as u32).max(1);
+        params[8..12].copy_from_slice(&substeps.to_le_bytes());
         queue.write_buffer(&params_buf, 0, &params);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {

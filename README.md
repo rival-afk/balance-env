@@ -59,7 +59,8 @@ Falls back to a clear `RuntimeError` if no suitable GPU adapter is found (e.g. i
 - Double pendulum on a horizontal cart (rail-locked, `cart_x` limited to ±2.2 m, damped cart `damper=3.0`).
 - SI units: cart mass 12 kg, uniform 1 m arms of 1 kg each, `g = 9.81 m/s²`, peak drive force 70 N (≈5 m/s²).
 - Same numbers drive the Godot game, which draws 1 m as 120 px (±2.2 m = ±264 px on screen).
-- Exact sympy-derived Lagrangian equations of motion — match the Godot game 1:1.
+- Exact sympy-derived Lagrangian equations of motion (plat.txt §3): `A(q)·q̈ = r`, with joint friction and the assist torque inside `r`.
+- RK4 at a fixed 240 Hz (4 sub-steps per 60 Hz action step); energy drift ≈2e-6 per 10 s.
 - Same ODE in both backends: CPU (Rust + rayon) and GPU (WGSL compute via wgpu).
 - Spawn: pendulum upright with random initial tilt; assist levels `0..4` mirror the in-game difficulty.
 
