@@ -6,6 +6,10 @@ use rand::prelude::*;
 
 pub const GRAVITY: f32 = 9.81;
 pub const M_CART: f32 = 40.0;
+/// Cart drag (rail-locked) — from the original game's linear_damp=3.0.
+pub const CART_DAMP: f32 = 3.0;
+/// Angular damping on the arms — from the original CPU integrator (0.10 /s).
+pub const DAMPING: f32 = 0.10;
 pub const CART_ACCEL_RAW: f32 = 900.0;
 /// Same rail extent as the Godot lane (±360 px) — physics stays identical at the ends.
 pub const CART_LIMIT: f32 = 360.0;
@@ -233,7 +237,7 @@ fn deriv(s: State, force: f32, assist: u8) -> [f32; 6] {
     let m20 = c2;      let m21 = cd;     let m22 = 1.0;
 
     let s1 = t1.sin(); let s2 = t2.sin();
-    let b0 = force + 2.0 * s1 * w1 * w1 + s2 * w2 * w2;
+    let b0 = force - CART_DAMP * s.v + 2.0 * s1 * w1 * w1 + s2 * w2 * w2;
     let b1 = -(d.sin() * w2 * w2 + GRAVITY * 2.0 * s1);
     let b2 = d.sin() * w1 * w1 - GRAVITY * s2;
 
@@ -246,7 +250,11 @@ fn deriv(s: State, force: f32, assist: u8) -> [f32; 6] {
     let mut a1 = (m00 * (b1 * m22 - m12 * b2) - b0 * (m10 * m22 - m12 * m20) + m02 * (m10 * b2 - b1 * m20)) / det;
     let mut a2 = (m00 * (m11 * b2 - b1 * m21) - m01 * (m10 * b2 - b1 * m20) + b0 * (m10 * m21 - m11 * m20)) / det;
 
-    // assist — identical formulation to Godot
+    // angular damping on the arms (identical to Godot)
+    a1 -= DAMPING * w1;
+    a2 -= DAMPING * w2;
+
+    // assist - identical formulation to Godot
     let kp = ASSIST_KP[assist as usize];
     let kd = ASSIST_KD[assist as usize];
     a1 += kp * t1.sin() - kd * w1;
