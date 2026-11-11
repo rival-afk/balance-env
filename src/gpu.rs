@@ -270,8 +270,8 @@ impl GpuEnv {
         for _ in 0..n {
             let env_seed = master.gen::<u64>();
             let mut rng = StdRng::seed_from_u64(env_seed);
-            let th1 = std::f32::consts::PI + rng.gen_range(-0.10..0.10);
-            let th2 = std::f32::consts::PI + rng.gen_range(-0.20..0.20);
+            let th1 = std::f32::consts::PI + rng.gen_range(-0.05..0.05);
+            let th2 = std::f32::consts::PI + rng.gen_range(-0.10..0.10);
             states.push([th1, th2, 0.0, 0.0, 0.0, 0.0]);
             assist.push([ASSIST_KP[assist_level as usize], ASSIST_KD[assist_level as usize]]);
             scores.push(ScoreState::new());
@@ -313,8 +313,8 @@ impl GpuEnv {
 
     pub fn reset(&mut self) {
         for i in 0..self.rngs.len() {
-            let th1 = std::f32::consts::PI + self.rngs[i].gen_range(-0.10..0.10);
-            let th2 = std::f32::consts::PI + self.rngs[i].gen_range(-0.20..0.20);
+            let th1 = std::f32::consts::PI + self.rngs[i].gen_range(-0.05..0.05);
+            let th2 = std::f32::consts::PI + self.rngs[i].gen_range(-0.10..0.10);
             self.states[i] = [th1, th2, 0.0, 0.0, 0.0, 0.0];
             self.scores[i].reset();
         }

@@ -56,8 +56,9 @@ Falls back to a clear `RuntimeError` if no suitable GPU adapter is found (e.g. i
 
 ## Physics
 
-- Double pendulum on a horizontal cart (rail-locked, `cart_x` limited to ±360 px, damped cart `damper=3.0`).
-- Cart mass 40, unit arms (L=1), unit masses, `g = 9.81 m/s²`.
+- Double pendulum on a horizontal cart (rail-locked, `cart_x` limited to ±2.2 m, damped cart `damper=3.0`).
+- SI units: cart mass 12 kg, uniform 1 m arms of 1 kg each, `g = 9.81 m/s²`, peak drive force 70 N (≈5 m/s²).
+- Same numbers drive the Godot game, which draws 1 m as 120 px (±2.2 m = ±264 px on screen).
 - Exact sympy-derived Lagrangian equations of motion — match the Godot game 1:1.
 - Same ODE in both backends: CPU (Rust + rayon) and GPU (WGSL compute via wgpu).
 - Spawn: pendulum upright with random initial tilt; assist levels `0..4` mirror the in-game difficulty.
@@ -71,7 +72,7 @@ Falls back to a clear `RuntimeError` if no suitable GPU adapter is found (e.g. i
 | 2 | `w1` | angular velocity, arm 1 |
 | 3 | `w2` | angular velocity, arm 2 |
 | 4 | `cart_x` | cart position (normalised to ±1) |
-| 5 | `cart_v` | cart velocity, px/s |
+| 5 | `cart_v` | cart velocity, m/s |
 | 6 | `verticality` | 0 (fallen) … 1 (full upright) |
 | 7 | `multiplier` | score multiplier (1.0 … 5.0) |
 | 8 | `score` | episode reward accumulator |

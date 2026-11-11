@@ -26,8 +26,16 @@ struct Assist {
 @group(0) @binding(2) var<storage, read> assists: array<Assist>;
 @group(0) @binding(3) var<uniform> params: Params;
 
-const ANG_DAMP: f32 = 0.1;   // angular damping on the arms (matches Rust/Godot)
-const CART_DAMP: f32 = 3.0;  // cart drag (matches Rust/Godot)
+const GRAVITY: f32 = 9.81;
+const M_CART: f32 = 12.0;
+const M1: f32 = 1.0;
+const M2: f32 = 1.0;
+const L1: f32 = 1.0;
+const L2: f32 = 1.0;
+const ANG_DAMP: f32 = 0.1;      // angular damping on the arms (matches Rust/Godot)
+const CART_DAMP: f32 = 3.0;     // cart drag (matches Rust/Godot)
+const DRIVE_FORCE: f32 = 70.0;  // N, peak drive force (matches Rust/Godot)
+const CART_LIMIT: f32 = 2.2;    // m, same as the game (264 px at 120 px/m)
 
 // Returns (a1, a2, a_cart) with damping and the assist spring applied.
 // `cart_v` is the cart velocity of this RK4 stage (used for cart drag).
@@ -40,20 +48,22 @@ fn accel(th1: f32, th2: f32, w1: f32, w2: f32, cart_v: f32, force: f32, kp: f32,
 	let c1 = cos(th1);
 	let c2 = cos(th2);
 
-	// M*a = b, sympy-derived (M=40, m1=m2=L=1, g=9.81)
-	let b0 = force - CART_DAMP * cart_v + 2.0 * s1 * w1 * w1 + s2 * w2 * w2;
-	let b1 = -(sd * w2 * w2 + 19.62 * s1);
-	let b2 = sd * w1 * w1 - 9.81 * s2;
+	// M(q) * a = b — same Lagrangian system matrix as Rust/Godot.
+	let b0 = force - CART_DAMP * cart_v
+		+ (M1 + M2) * L1 * s1 * w1 * w1
+		+ M2 * L2 * s2 * w2 * w2;
+	let b1 = -(M2 * L1 * L2 * sd * w2 * w2 + (M1 + M2) * GRAVITY * L1 * s1);
+	let b2 = M2 * L1 * L2 * sd * w1 * w1 - M2 * GRAVITY * L2 * s2;
 
-	let m00 = 42.0;
-	let m01 = 2.0 * c1;
-	let m02 = c2;
-	let m10 = 2.0 * c1;
-	let m11 = 2.0;
-	let m12 = cd;
-	let m20 = c2;
-	let m21 = cd;
-	let m22 = 1.0;
+	let m00 = M_CART + M1 + M2;
+	let m01 = (M1 + M2) * L1 * c1;
+	let m02 = M2 * L2 * c2;
+	let m10 = m01;
+	let m11 = (M1 + M2) * L1 * L1;
+	let m12 = M2 * L1 * L2 * cd;
+	let m20 = m02;
+	let m21 = m12;
+	let m22 = M2 * L2 * L2;
 
 	let det = m00 * (m11 * m22 - m12 * m21)
 			- m01 * (m10 * m22 - m12 * m20)
@@ -83,7 +93,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let st = states[i];
 	let kp = assists[i].kp;
 	let kd = assists[i].kd;
-	let force = clamp(f32(actions[i]), -1.0, 1.0) * 900.0;
+	let force = clamp(f32(actions[i]), -1.0, 1.0) * DRIVE_FORCE;
 	let dt = params.dt;
 
 	// RK4, full 6-dim — mirrors the CPU integrator step for step.
@@ -116,12 +126,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	out.x   = st.x   + dt * (k14 + 2.0 * k24 + 2.0 * k34 + k44) / 6.0;
 	out.v   = st.v   + dt * (k15 + 2.0 * k25 + 2.0 * k35 + k45) / 6.0;
 
-	// rail clamp (±360 px, same as the game and the CPU path)
-	if (out.x > 360.0) {
-		out.x = 360.0;
+	// rail clamp (matches the game and the CPU path)
+	if (out.x > CART_LIMIT) {
+		out.x = CART_LIMIT;
 		if (out.v > 0.0) { out.v = 0.0; }
-	} else if (out.x < -360.0) {
-		out.x = -360.0;
+	} else if (out.x < -CART_LIMIT) {
+		out.x = -CART_LIMIT;
 		if (out.v < 0.0) { out.v = 0.0; }
 	}
 

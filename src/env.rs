@@ -1,18 +1,23 @@
 //! Balance physics — 1:1 port of the Godot game, both sharing
 //! the Lagrangian-derived system matrix M*a = b, sympy-verified.
-//! Constants and pathways match exactly: M=40, m1=m2=L1=L2=1, g=9.81.
+//! SI units throughout: kg, m, N, m/s. The Godot lane draws with 120 px/m.
 
 use rand::prelude::*;
 
 pub const GRAVITY: f32 = 9.81;
-pub const M_CART: f32 = 40.0;
+pub const M_CART: f32 = 12.0;
+pub const M1: f32 = 1.0;
+pub const M2: f32 = 1.0;
+pub const L1: f32 = 1.0;
+pub const L2: f32 = 1.0;
 /// Cart drag (rail-locked) — from the original game's linear_damp=3.0.
 pub const CART_DAMP: f32 = 3.0;
 /// Angular damping on the arms — from the original CPU integrator (0.10 /s).
 pub const DAMPING: f32 = 0.10;
-pub const CART_ACCEL_RAW: f32 = 900.0;
-/// Same rail extent as the Godot lane (±360 px) — physics stays identical at the ends.
-pub const CART_LIMIT: f32 = 360.0;
+/// Peak drive force, N (≈5 m/s² on the 14 kg cart+arms system).
+pub const CART_ACCEL_RAW: f32 = 70.0;
+/// Rail extent in metres (±2.2 m = ±264 px; the platform stops just short of the walls at ±3 m).
+pub const CART_LIMIT: f32 = 2.2;
 
 pub const ASSIST_KP: [f32; 5] = [0.0, 3.0, 15.0, 60.0, 200.0];
 pub const ASSIST_KD: [f32; 5] = [0.0, 1.2, 6.0, 25.0, 80.0];
@@ -138,8 +143,8 @@ impl Env {
             Some(s) => StdRng::seed_from_u64(s),
             None => StdRng::from_seed(rand::random::<[u8; 32]>()),
         };
-        let th1 = std::f32::consts::PI + rng.gen_range(-0.10..0.10);
-        let th2 = std::f32::consts::PI + rng.gen_range(-0.20..0.20);
+        let th1 = std::f32::consts::PI + rng.gen_range(-0.05..0.05);
+        let th2 = std::f32::consts::PI + rng.gen_range(-0.10..0.10);
         Self {
             rng,
             s: State { th1, th2, w1: 0.0, w2: 0.0, x: 0.0, v: 0.0 },
@@ -149,8 +154,8 @@ impl Env {
     }
 
     pub fn reset(&mut self) {
-        let th1 = std::f32::consts::PI + self.rng.gen_range(-0.10..0.10);
-        let th2 = std::f32::consts::PI + self.rng.gen_range(-0.20..0.20);
+        let th1 = std::f32::consts::PI + self.rng.gen_range(-0.05..0.05);
+        let th2 = std::f32::consts::PI + self.rng.gen_range(-0.10..0.10);
         self.s = State { th1, th2, w1: 0.0, w2: 0.0, x: 0.0, v: 0.0 };
         self.score.reset();
     }
@@ -231,15 +236,25 @@ fn deriv(s: State, force: f32, assist: u8) -> [f32; 6] {
     let cd = d.cos();
     let c1 = t1.cos();
     let c2 = t2.cos();
+    let s1 = t1.sin();
+    let s2 = t2.sin();
 
-    let m00 = M_CART + 2.0; let m01 = 2.0 * c1; let m02 = c2;
-    let m10 = 2.0 * c1; let m11 = 2.0;    let m12 = cd;
-    let m20 = c2;      let m21 = cd;     let m22 = 1.0;
+    // M(q) * a = b — same generalized mass matrix as Godot/WGSL.
+    let m00 = M_CART + M1 + M2;
+    let m01 = (M1 + M2) * L1 * c1;
+    let m02 = M2 * L2 * c2;
+    let m10 = m01;
+    let m11 = (M1 + M2) * L1 * L1;
+    let m12 = M2 * L1 * L2 * cd;
+    let m20 = m02;
+    let m21 = m12;
+    let m22 = M2 * L2 * L2;
 
-    let s1 = t1.sin(); let s2 = t2.sin();
-    let b0 = force - CART_DAMP * s.v + 2.0 * s1 * w1 * w1 + s2 * w2 * w2;
-    let b1 = -(d.sin() * w2 * w2 + GRAVITY * 2.0 * s1);
-    let b2 = d.sin() * w1 * w1 - GRAVITY * s2;
+    let b0 = force - CART_DAMP * s.v
+        + (M1 + M2) * L1 * s1 * w1 * w1
+        + M2 * L2 * s2 * w2 * w2;
+    let b1 = -(M2 * L1 * L2 * d.sin() * w2 * w2 + (M1 + M2) * GRAVITY * L1 * s1);
+    let b2 = M2 * L1 * L2 * d.sin() * w1 * w1 - M2 * GRAVITY * L2 * s2;
 
     // Cramer's rule — exactly the same as Godot.
     let det = m00 * (m11 * m22 - m12 * m21)
