@@ -47,7 +47,7 @@ impl Env {
     }
 
     fn __repr__(&self) -> String {
-        format!("BalanceEnv(assist={}, score={:.3})", self.inner.assist_level, self.inner.score)
+        format!("BalanceEnv(assist={}, score={:.3})", self.inner.assist_level, self.inner.score.score)
     }
 }
 

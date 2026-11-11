@@ -29,6 +29,84 @@ pub struct State {
     pub v: f32,
 }
 
+/// Scoring/episode bookkeeping — shared by the CPU env and the GPU batch env.
+/// Pure function of (th1, th2, dt) plus its own accumulated state.
+#[derive(Clone, Copy, Debug)]
+pub struct ScoreState {
+    pub score: f32,
+    pub multiplier: f32,
+    pub perfect_streak: f32,
+    pub total_perfect: f32,
+    pub balance_time: f32,
+    pub fault_count: u32,
+    pub fault_time: f32,
+    pub prev_fault: bool,
+}
+
+impl Default for ScoreState {
+    fn default() -> Self {
+        Self {
+            score: 0.0,
+            multiplier: 1.0,
+            perfect_streak: 0.0,
+            total_perfect: 0.0,
+            balance_time: 0.0,
+            fault_count: 0,
+            fault_time: 0.0,
+            prev_fault: false,
+        }
+    }
+}
+
+impl ScoreState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Updates all scoring from the post-step angles.
+    /// Returns (reward, done, verticality).
+    pub fn update(&mut self, th1: f32, th2: f32, dt: f32) -> (f32, bool, f32) {
+        let v = verticality(th1, th2);
+        let perfect = v > PERFECT_VERT;
+        let up_avg = (-th1.cos() - th2.cos()) * 0.5;
+        let fault = up_avg > -0.2 && v < DANGER_VERT;
+
+        self.balance_time += dt;
+        if perfect {
+            self.perfect_streak += dt;
+            self.total_perfect += dt;
+        } else {
+            self.perfect_streak = 0.0;
+        }
+        self.multiplier = 1.0 + (self.perfect_streak * MULT_GAIN).min(MAX_MULT);
+        self.score += v * v * RATE * self.multiplier * dt;
+
+        if fault {
+            self.fault_time += dt;
+            if !self.prev_fault {
+                self.fault_count += 1;
+            }
+        }
+        self.prev_fault = fault;
+
+        let reward = v * v * self.multiplier;
+        let done = self.balance_time > 30.0 || v < 0.02;
+        (reward, done, v)
+    }
+}
+
+/// Verticality — fraction of "up" the pair of arms still has (1 = full upright).
+#[inline]
+pub(crate) fn verticality(t1: f32, t2: f32) -> f32 {
+    let h1 = -t1.cos();
+    let h2 = -t2.cos();
+    ((h1 + h2) * 0.5).clamp(0.0, 1.0)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Obs {
     pub t1: f32, pub t2: f32, pub w1: f32, pub w2: f32,
@@ -50,14 +128,7 @@ pub struct Env {
     rng: StdRng,
     pub s: State,
     pub assist_level: u8,
-    pub score: f32,
-    pub multiplier: f32,
-    pub perfect_streak: f32,
-    pub total_perfect: f32,
-    pub balance_time: f32,
-    pub fault_count: u32,
-    pub fault_time: f32,
-    pub prev_fault: bool,
+    pub score: ScoreState,
 }
 
 impl Env {
@@ -72,10 +143,7 @@ impl Env {
             rng,
             s: State { th1, th2, w1: 0.0, w2: 0.0, x: 0.0, v: 0.0 },
             assist_level: assist_level.min(4),
-            score: 0.0, multiplier: 1.0,
-            perfect_streak: 0.0, total_perfect: 0.0,
-            balance_time: 0.0, fault_count: 0, fault_time: 0.0,
-            prev_fault: false,
+            score: ScoreState::new(),
         }
     }
 
@@ -83,29 +151,19 @@ impl Env {
         let th1 = std::f32::consts::PI + self.rng.gen_range(-0.10..0.10);
         let th2 = std::f32::consts::PI + self.rng.gen_range(-0.20..0.20);
         self.s = State { th1, th2, w1: 0.0, w2: 0.0, x: 0.0, v: 0.0 };
-        self.score = 0.0; self.multiplier = 1.0;
-        self.perfect_streak = 0.0; self.total_perfect = 0.0;
-        self.balance_time = 0.0; self.fault_count = 0; self.fault_time = 0.0;
-        self.prev_fault = false;
+        self.score.reset();
     }
 
     pub fn set_assist(&mut self, level: u8) {
         self.assist_level = level.min(4);
     }
 
-    #[inline]
-    fn verticality(t1: f32, t2: f32) -> f32 {
-        let h1 = -t1.cos();
-        let h2 = -t2.cos();
-        ((h1 + h2) * 0.5).clamp(0.0, 1.0)
-    }
-
     pub fn obs(&self) -> Obs {
-        let v = Self::verticality(self.s.th1, self.s.th2);
+        let v = verticality(self.s.th1, self.s.th2);
         Obs {
             t1: self.s.th1, t2: self.s.th2, w1: self.s.w1, w2: self.s.w2,
             cart_x: self.s.x / CART_LIMIT, cart_v: self.s.v,
-            verticality: v, multiplier: self.multiplier, score: self.score,
+            verticality: v, multiplier: self.score.multiplier, score: self.score.score,
         }
     }
 
@@ -159,29 +217,7 @@ impl Env {
             if self.s.v < 0.0 { self.s.v = 0.0; }
         }
 
-        let v = Self::verticality(self.s.th1, self.s.th2);
-        let perfect = v > PERFECT_VERT;
-        let up_avg = (-self.s.th1.cos() - self.s.th2.cos()) * 0.5;
-        let fault = up_avg > -0.2 && v < DANGER_VERT;
-
-        self.balance_time += dt;
-        if perfect {
-            self.perfect_streak += dt;
-            self.total_perfect += dt;
-        } else {
-            self.perfect_streak = 0.0;
-        }
-        self.multiplier = 1.0 + (self.perfect_streak * MULT_GAIN).min(MAX_MULT);
-        self.score += v * v * RATE * self.multiplier * dt;
-
-        if fault {
-            self.fault_time += dt;
-            if !self.prev_fault { self.fault_count += 1; }
-        }
-        self.prev_fault = fault;
-
-        let reward = v * v * self.multiplier;
-        let done = self.balance_time > 30.0 || v < 0.02;
+        let (reward, done, _v) = self.score.update(self.s.th1, self.s.th2, dt);
         (self.obs(), reward, done)
     }
 }
