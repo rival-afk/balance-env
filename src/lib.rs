@@ -6,6 +6,7 @@ use rand::prelude::*;
 use rayon::prelude::*;
 
 mod env;
+mod gpu;
 
 #[pyclass]
 pub struct Env {
@@ -90,22 +91,11 @@ impl BatchEnv {
         let mut rew_list = Vec::with_capacity(results.len());
         let mut done_list = Vec::with_capacity(results.len());
         for (o, r, d) in results {
-            obs_list.push(o.to_vec());
+            obs_list.push(o);
             rew_list.push(r);
             done_list.push(d);
         }
-        Python::with_gil(|py| {
-            let obs_list_obj = pyo3::types::PyList::new(
-                py,
-                obs_list.iter().map(|o| o.to_vec()))?;
-            let rew_list_obj = pyo3::types::PyList::new(
-                py,
-                rew_list.into_iter().map(|r| r))?;
-            let done_list_obj = pyo3::types::PyList::new(
-                py,
-                done_list.into_iter().map(|d| d))?;
-            Ok((obs_list_obj.into(), rew_list_obj.into(), done_list_obj.into()))
-        })
+        Python::with_gil(|py| obs_reward_done_py(py, obs_list, rew_list, done_list))
     }
 
     fn reset(&mut self) {
@@ -117,9 +107,75 @@ impl BatchEnv {
     }
 }
 
+fn obs_reward_done_py(py: Python<'_>, obs: Vec<[f32; 9]>, rew: Vec<f32>, done: Vec<bool>) -> PyResult<(PyObject, PyObject, PyObject)> {
+    let obs_list_obj = pyo3::types::PyList::new(
+        py,
+        obs.into_iter().map(|o| o.to_vec()))?;
+    let rew_list_obj = pyo3::types::PyList::new(
+        py,
+        rew.into_iter().map(|r| r))?;
+    let done_list_obj = pyo3::types::PyList::new(
+        py,
+        done.into_iter().map(|d| d))?;
+    Ok((obs_list_obj.into(), rew_list_obj.into(), done_list_obj.into()))
+}
+
+#[pyclass]
+pub struct GpuBatchEnv {
+    inner: gpu::GpuEnv,
+}
+
+#[pymethods]
+impl GpuBatchEnv {
+    /// Создаёт GPU-батч env'ей. Ошибка, если адаптер/устройство недоступны.
+    #[new]
+    #[pyo3(signature = (n, seed = None, assist_level = 1))]
+    fn new(n: usize, seed: Option<u64>, assist_level: u8) -> PyResult<Self> {
+        gpu::GpuEnv::new(n, seed, assist_level)
+            .map(|inner| GpuBatchEnv { inner })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+    }
+
+    /// True, если на машине есть пригодный GPU через wgpu.
+    #[staticmethod]
+    fn available() -> bool {
+        gpu::GpuEnv::is_available()
+    }
+
+    /// actions: список (-1, 0, +1) длиной n. Физика — на GPU,
+    /// скоринг/ob/награди — на CPU (rayon).
+    fn step(&mut self, actions: Vec<i8>) -> PyResult<(PyObject, PyObject, PyObject)> {
+        let (obs, rew, done) = self
+            .inner
+            .step(&actions)
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        Python::with_gil(|py| obs_reward_done_py(py,
+            obs.into_iter().map(|o| o.as_array()).collect(),
+            rew,
+            done))
+    }
+
+    fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    fn set_assist(&mut self, level: u8) {
+        self.inner.set_assist(level);
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.n()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("BalanceGpuBatchEnv(n={})", self.inner.n())
+    }
+}
+
 #[pymodule]
 fn balance_env(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Env>()?;
     m.add_class::<BatchEnv>()?;
+    m.add_class::<GpuBatchEnv>()?;
     Ok(())
 }

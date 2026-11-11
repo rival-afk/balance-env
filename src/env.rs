@@ -119,9 +119,6 @@ impl Obs {
         [self.t1, self.t2, self.w1, self.w2, self.cart_x, self.cart_v,
          self.verticality, self.multiplier, self.score]
     }
-    pub fn vec(&self) -> Vec<f32> {
-        self.as_array().to_vec()
-    }
 }
 
 pub struct Env {

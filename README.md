@@ -38,12 +38,28 @@ obs, reward, done = envs.step([1] * 64)
 ```
 
 Each `step` returns three parallel lists: observations, rewards, done flags.
+CPU stepping is parallelised with rayon (all cores). Expect ~1.8M env-steps/s at large batch sizes.
+
+## GpuBatchEnv — compute on the GPU
+
+```python
+import balance_env
+
+if balance_env.GpuBatchEnv.available():
+    envs = balance_env.GpuBatchEnv(n=4096, seed=None, assist_level=0)
+    obs, reward, done = envs.step([1] * 4096)
+```
+
+The physics (Lagrangian ODE, RK4, rail clamp) runs in a WGSL compute shader via wgpu — one invocation per environment. Scoring/observations/rewards stay on the CPU (rayon) and are shared with the single-thread env, so reward semantics are identical to `Env`/`BatchEnv`. Same-seed batches step bit-identically on this machine.
+
+Falls back to a clear `RuntimeError` if no suitable GPU adapter is found (e.g. in CI); `available()` reports support ahead of time. Combine with `BatchEnv` for CPU-only machines.
 
 ## Physics
 
-- Double pendulum on a horizontal cart (rail-locked, `cart_x` limited to ±130 px, damped cart `damper=3.0`).
+- Double pendulum on a horizontal cart (rail-locked, `cart_x` limited to ±360 px, damped cart `damper=3.0`).
 - Cart mass 40, unit arms (L=1), unit masses, `g = 9.81 m/s²`.
 - Exact sympy-derived Lagrangian equations of motion — match the Godot game 1:1.
+- Same ODE in both backends: CPU (Rust + rayon) and GPU (WGSL compute via wgpu).
 - Spawn: pendulum upright with random initial tilt; assist levels `0..4` mirror the in-game difficulty.
 
 ## Observation vector
